@@ -7,7 +7,7 @@ import json
 from gql import Client
 from graphql import print_ast
 from monarchmoney import MonarchMoney
-from monarchmoney.monarchmoney import LoginFailedException
+from monarchmoney.monarchmoney import LoginFailedException, RequestFailedException
 
 
 class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
@@ -199,6 +199,31 @@ class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result, "Expected result to not be None")
         self.assertEqual(result["deleteAccount"]["deleted"], True)
         self.assertEqual(result["deleteAccount"]["errors"], None)
+
+    @patch.object(Client, "execute_async")
+    async def test_merge_recurrence_groups_guards(self, mock_execute_async):
+        """
+        merge_recurrence_groups rejects bad input locally and raises on API errors.
+        """
+
+        with self.assertRaises(ValueError):
+            await self.monarch_money.merge_recurrence_groups("170000000000000001", [])
+        with self.assertRaises(ValueError):
+            await self.monarch_money.merge_recurrence_groups(
+                "170000000000000001", ["170000000000000001"]
+            )
+        mock_execute_async.assert_not_called()
+
+        mock_execute_async.return_value = {
+            "mergeRecurrenceGroups": {
+                "recurrenceGroup": None,
+                "errors": [{"message": "Groups are not eligible to merge"}],
+            }
+        }
+        with self.assertRaises(RequestFailedException):
+            await self.monarch_money.merge_recurrence_groups(
+                "170000000000000001", ["170000000000000002"]
+            )
 
     @patch.object(Client, "execute_async")
     async def test_get_account_type_options(self, mock_execute_async):

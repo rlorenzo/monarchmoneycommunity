@@ -3670,6 +3670,71 @@ class MonarchMoney(object):
             variables=variables,
         )
 
+    async def merge_recurrence_groups(
+        self,
+        base_group_id: str,
+        group_ids_to_merge: List[str],
+        new_group_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Merges one or more recurrence groups (the "Recurring v2" model) into a
+        base group.
+
+        Per Monarch's schema, this creates a new group seeded from the base
+        group's merchant, name and logo at the merged frequency, re-points every
+        transaction link from the base and merged groups onto it, and marks all
+        source groups (base included) as merged and ended. The returned group
+        has a new id.
+
+        :param base_group_id: The recurrence group whose metadata seeds the
+            merged group.
+        :param group_ids_to_merge: Recurrence group ids to merge into the base.
+        :param new_group_name: Optional display name for the merged group;
+            omit to inherit the base group's name.
+        :raises ValueError: if ``group_ids_to_merge`` is empty or contains
+            ``base_group_id``.
+        :raises RequestFailedException: if Monarch reports errors.
+        """
+        if not group_ids_to_merge:
+            raise ValueError("group_ids_to_merge must not be empty")
+        if base_group_id in group_ids_to_merge:
+            raise ValueError("group_ids_to_merge must not contain base_group_id")
+
+        query = gql(
+            """
+            mutation Web_MergeRecurrenceGroups($input: MergeRecurrenceGroupsInput!) {
+              mergeRecurrenceGroups(input: $input) {
+                recurrenceGroup {
+                  id
+                }
+                errors {
+                  message
+                }
+              }
+            }
+            """
+        )
+
+        variables: Dict[str, Any] = {
+            "input": {
+                "baseGroupId": base_group_id,
+                "groupIdsToMerge": group_ids_to_merge,
+            }
+        }
+        if new_group_name is not None:
+            variables["input"]["newGroupName"] = new_group_name
+
+        response = await self.gql_call(
+            operation="Web_MergeRecurrenceGroups",
+            graphql_query=query,
+            variables=variables,
+        )
+
+        if response["mergeRecurrenceGroups"].get("errors"):
+            raise RequestFailedException(response["mergeRecurrenceGroups"]["errors"])
+
+        return response
+
     async def get_recurring_transactions(
         self,
         start_date: Optional[str] = None,
