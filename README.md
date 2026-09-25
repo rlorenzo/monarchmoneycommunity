@@ -260,6 +260,10 @@ As of writing this README, the following methods are supported:
       <td>modifies one or more attributes for an existing transaction</td>
     </tr>
     <tr>
+      <td><code>merge_recurrence_groups</code></td>
+      <td>merges recurrence groups (Recurring v2) into a base group, returning the new merged group's id. Optional <code>new_group_name</code>, e.g. <code>await mm.merge_recurrence_groups("170000000000000001", ["170000000000000002"], new_group_name="Gym")</code></td>
+    </tr>
+    <tr>
       <td><code>update_reoccuring</code></td>
       <td>updates recurring merchant settings (frequency, amount, date, active status)</td>
     </tr>
