@@ -647,6 +647,33 @@ class TestSessionFile(unittest.IsolatedAsyncioTestCase):
         MonarchMoney(session_file=self.session_file, token="tok").save_session()
         self.assertEqual(stat.S_IMODE(os.stat(self.session_file).st_mode), 0o600)
 
+    def test_session_paths_expand_tilde(self):
+        # Both the constructor's session_file and an explicit filename passed
+        # directly to save_session/load_session/delete_session should expand
+        # a leading ~ instead of being treated as a literal relative path.
+        with patch.dict(os.environ, {"HOME": self.dir}):
+            tilde_path = os.path.join("~", "sub", "tilde_session.json")
+            expanded = os.path.join(self.dir, "sub", "tilde_session.json")
+
+            MonarchMoney(session_file=tilde_path, token="tok").save_session()
+            self.assertTrue(os.path.exists(expanded))
+
+            restored = MonarchMoney(session_file=tilde_path)
+            restored.load_session()
+            self.assertEqual(restored.token, "tok")
+
+            other_path = os.path.join("~", "sub", "tilde_session2.json")
+            other_expanded = os.path.join(self.dir, "sub", "tilde_session2.json")
+            MonarchMoney(token="tok2").save_session(other_path)
+            self.assertTrue(os.path.exists(other_expanded))
+
+            loader = MonarchMoney()
+            loader.load_session(other_path)
+            self.assertEqual(loader.token, "tok2")
+
+            loader.delete_session(other_path)
+            self.assertFalse(os.path.exists(other_expanded))
+
     async def test_legacy_pickle_session_is_never_unpickled(self):
         marker = os.path.join(self.dir, "pwned")
         os.makedirs(os.path.dirname(self.session_file))

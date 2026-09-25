@@ -137,6 +137,13 @@ class MonarchMoney(object):
         # Monarch long-lived browser-style sessions return tokenExpiration = null/None
         return token_expiration in (None, "null")
 
+    def _resolve_session_path(self, filename: Optional[str] = None) -> str:
+        """Resolve a session file path, defaulting to the configured session
+        file and expanding a leading ~ so tilde-based paths work as documented."""
+        return os.path.expanduser(
+            filename if filename is not None else self._session_file
+        )
+
     @property
     def timeout(self) -> int:
         """The timeout, in seconds, for GraphQL calls."""
@@ -215,10 +222,11 @@ class MonarchMoney(object):
         mfa_secret_key: Optional[str] = None,
     ) -> None:
         """Logs into a Monarch Money account."""
-        if use_saved_session and os.path.exists(self._session_file):
-            print(f"Using saved session found at {self._session_file}", file=sys.stderr)
+        session_path = self._resolve_session_path()
+        if use_saved_session and os.path.exists(session_path):
+            print(f"Using saved session found at {session_path}", file=sys.stderr)
             try:
-                self.load_session(self._session_file)
+                self.load_session(session_path)
                 return
             except (LegacySessionFileException, LoginFailedException) as e:
                 print(str(e), file=sys.stderr)
@@ -4033,9 +4041,7 @@ class MonarchMoney(object):
 
     def save_session(self, filename: Optional[str] = None) -> None:
         """Saves auth credentials needed to access a Monarch Money account."""
-        if filename is None:
-            filename = self._session_file
-        filename = os.path.abspath(filename)
+        filename = os.path.abspath(self._resolve_session_path(filename))
 
         if not self._token and not self._cookies:
             raise LoginFailedException("No credentials set; cannot save session.")
@@ -4076,8 +4082,7 @@ class MonarchMoney(object):
 
     def load_session(self, filename: Optional[str] = None) -> None:
         """Loads auth credentials from a JSON session file."""
-        if filename is None:
-            filename = self._session_file
+        filename = self._resolve_session_path(filename)
 
         # Never unpickle: older versions wrote pickle files, which can run code.
         with open(filename, "rb") as fh:
@@ -4118,8 +4123,7 @@ class MonarchMoney(object):
         """
         Deletes the session file.
         """
-        if filename is None:
-            filename = self._session_file
+        filename = self._resolve_session_path(filename)
 
         if os.path.exists(filename):
             os.remove(filename)
