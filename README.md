@@ -96,7 +96,7 @@ By default the session is saved as JSON to `~/.mm/mm_session.json`, readable onl
 from monarchmoney import MonarchMoney, RequireMFAException
 
 mm = MonarchMoney()
-mm.interactive_login()
+await mm.interactive_login()
 
 # Save it for later, no more need to login!
 mm.save_session()
