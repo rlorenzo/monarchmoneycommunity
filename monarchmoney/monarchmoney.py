@@ -6,8 +6,8 @@ import json
 import mimetypes
 import os
 import sys
-import pickle
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from io import StringIO
@@ -25,8 +25,8 @@ CSRF_KEY = "csrftoken"
 DEFAULT_RECORD_LIMIT = 100
 DEFAULT_DELAY_SECS = 10
 ERRORS_KEY = "error_code"
-SESSION_DIR = ".mm"
-SESSION_FILE = f"{SESSION_DIR}/mm_session.pickle"
+SESSION_DIR = os.path.expanduser(os.path.join("~", ".mm"))
+SESSION_FILE = os.path.join(SESSION_DIR, "mm_session.json")
 DEFAULT_TIMEOUT_SECS = 300
 
 REQUIRED_COOKIES = ("session_id", "csrftoken")
@@ -87,6 +87,10 @@ class CaptchaRequiredException(LoginFailedException):
     pass
 
 
+class LegacySessionFileException(LoginFailedException):
+    """The session file is not JSON (e.g. an old pickle) and was not loaded."""
+
+
 def _to_iso_date(
     value: Optional[Union[date, datetime, str]],
 ) -> Optional[str]:
@@ -132,6 +136,13 @@ class MonarchMoney(object):
     def _is_long_lived(token_expiration) -> bool:
         # Monarch long-lived browser-style sessions return tokenExpiration = null/None
         return token_expiration in (None, "null")
+
+    def _resolve_session_path(self, filename: Optional[str] = None) -> str:
+        """Resolve a session file path, defaulting to the configured session
+        file and expanding a leading ~ so tilde-based paths work as documented."""
+        return os.path.expanduser(
+            filename if filename is not None else self._session_file
+        )
 
     @property
     def timeout(self) -> int:
@@ -211,10 +222,14 @@ class MonarchMoney(object):
         mfa_secret_key: Optional[str] = None,
     ) -> None:
         """Logs into a Monarch Money account."""
-        if use_saved_session and os.path.exists(self._session_file):
-            print(f"Using saved session found at {self._session_file}", file=sys.stderr)
-            self.load_session(self._session_file)
-            return
+        session_path = self._resolve_session_path()
+        if use_saved_session and os.path.exists(session_path):
+            print(f"Using saved session found at {session_path}", file=sys.stderr)
+            try:
+                self.load_session(session_path)
+                return
+            except (LegacySessionFileException, LoginFailedException) as e:
+                print(str(e), file=sys.stderr)
 
         if (email is None) or (password is None) or (email == "") or (password == ""):
             raise LoginFailedException(
@@ -244,11 +259,16 @@ class MonarchMoney(object):
         headers.pop("Accept", None)
         headers.pop("Content-Type", None)
 
-        if "monarch.com" in url:
+        host = urllib.parse.urlparse(url).hostname or ""
+        if host == "monarch.com" or host.endswith(".monarch.com"):
             cookies = self._cookies if self._auth_mode == "cookie" else None
         else:
             cookies = None
-            for key in list(MONARCH_COOKIE_HEADERS) + ["X-Csrftoken"]:
+            for key in list(MONARCH_COOKIE_HEADERS) + [
+                "X-Csrftoken",
+                "Authorization",
+                AUTH_HEADER_KEY,
+            ]:
                 headers.pop(key, None)
         async with ClientSession(
             headers=headers, cookies=cookies, trust_env=True
@@ -4021,9 +4041,7 @@ class MonarchMoney(object):
 
     def save_session(self, filename: Optional[str] = None) -> None:
         """Saves auth credentials needed to access a Monarch Money account."""
-        if filename is None:
-            filename = self._session_file
-        filename = os.path.abspath(filename)
+        filename = os.path.abspath(self._resolve_session_path(filename))
 
         if not self._token and not self._cookies:
             raise LoginFailedException("No credentials set; cannot save session.")
@@ -4041,17 +4059,42 @@ class MonarchMoney(object):
         if self._cookies:
             session_data["cookies"] = self._cookies
 
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        with open(filename, "wb") as fh:
-            pickle.dump(session_data, fh)
+        # The file holds a bearer credential: keep it owner-only.
+        dirname = os.path.dirname(filename)
+        if dirname:
+            os.makedirs(dirname, mode=0o700, exist_ok=True)
+            # makedirs' mode only applies when it creates the directory, so a
+            # pre-existing default session dir with looser perms stays that way.
+            # Tighten it best-effort, but never chmod a user-chosen directory
+            # (e.g. the cwd) that we didn't create for this purpose.
+            if os.path.abspath(dirname) == os.path.abspath(SESSION_DIR):
+                try:
+                    os.chmod(dirname, 0o700)
+                except OSError:
+                    pass
+        fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(session_data, fh)
+        if not hasattr(os, "fchmod"):
+            os.chmod(filename, 0o600)
 
     def load_session(self, filename: Optional[str] = None) -> None:
-        """Loads auth credentials from a pickle file."""
-        if filename is None:
-            filename = self._session_file
+        """Loads auth credentials from a JSON session file."""
+        filename = self._resolve_session_path(filename)
 
+        # Never unpickle: older versions wrote pickle files, which can run code.
         with open(filename, "rb") as fh:
-            data = pickle.load(fh)
+            try:
+                data = json.loads(fh.read())
+            except ValueError:
+                data = None
+        if not isinstance(data, dict):
+            raise LegacySessionFileException(
+                f"Legacy or invalid session file ignored at {filename}; "
+                "please log in again."
+            )
 
         auth_mode = data.get("auth_mode", "token")
 
@@ -4080,8 +4123,7 @@ class MonarchMoney(object):
         """
         Deletes the session file.
         """
-        if filename is None:
-            filename = self._session_file
+        filename = self._resolve_session_path(filename)
 
         if os.path.exists(filename):
             os.remove(filename)

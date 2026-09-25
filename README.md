@@ -90,11 +90,13 @@ await mm.login(
 
 You can easily save your session for use later on.  While we don't know precisely how long a session lasts, authors of this library have found it can last several months.
 
+By default the session is saved as JSON to `~/.mm/mm_session.json`, readable only by your user. It holds a bearer credential, so treat it like a password. Session files written by older versions (pickle format) are ignored for safety; log in again once to replace them.
+
 ```python
 from monarchmoney import MonarchMoney, RequireMFAException
 
 mm = MonarchMoney()
-mm.interactive_login()
+await mm.interactive_login()
 
 # Save it for later, no more need to login!
 mm.save_session()

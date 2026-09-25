@@ -1,6 +1,5 @@
 import json
 import os
-import pickle
 import unittest
 from unittest.mock import patch
 
@@ -28,9 +27,9 @@ from typedmonarchmoney.models import (
 
 class TestMonarchMoneyTyped(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.session_file = "temp_typed_session.pickle"
-        with open(self.session_file, "wb") as fh:
-            pickle.dump({"cookies": {}, "token": "test_token"}, fh)
+        self.session_file = "temp_typed_session.json"
+        with open(self.session_file, "w") as fh:
+            json.dump({"cookies": {}, "token": "test_token"}, fh)
         self.monarch_money = TypedMonarchMoney()
         self.monarch_money.load_session(self.session_file)
 
