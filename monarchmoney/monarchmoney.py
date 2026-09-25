@@ -4057,6 +4057,15 @@ class MonarchMoney(object):
         dirname = os.path.dirname(filename)
         if dirname:
             os.makedirs(dirname, mode=0o700, exist_ok=True)
+            # makedirs' mode only applies when it creates the directory, so a
+            # pre-existing default session dir with looser perms stays that way.
+            # Tighten it best-effort, but never chmod a user-chosen directory
+            # (e.g. the cwd) that we didn't create for this purpose.
+            if os.path.abspath(dirname) == os.path.abspath(SESSION_DIR):
+                try:
+                    os.chmod(dirname, 0o700)
+                except OSError:
+                    pass
         fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         if hasattr(os, "fchmod"):
             os.fchmod(fd, 0o600)
