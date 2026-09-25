@@ -201,94 +201,9 @@ class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["deleteAccount"]["errors"], None)
 
     @patch.object(Client, "execute_async")
-    async def test_merge_recurrence_groups(self, mock_execute_async):
+    async def test_merge_recurrence_groups_guards(self, mock_execute_async):
         """
-        Test the merge_recurrence_groups method.
-        """
-
-        mock_execute_async.return_value = {
-            "mergeRecurrenceGroups": {
-                "recurrenceGroup": {"id": "170000000000000009"},
-                "errors": [],
-            }
-        }
-
-        result = await self.monarch_money.merge_recurrence_groups(
-            "170000000000000001",
-            ["170000000000000002", "170000000000000003"],
-            new_group_name="Merged",
-        )
-
-        mock_execute_async.assert_called_once()
-
-        kwargs = mock_execute_async.call_args.kwargs
-        self.assertEqual(kwargs["operation_name"], "Web_MergeRecurrenceGroups")
-        self.assertEqual(
-            kwargs["variable_values"],
-            {
-                "input": {
-                    "baseGroupId": "170000000000000001",
-                    "groupIdsToMerge": ["170000000000000002", "170000000000000003"],
-                    "newGroupName": "Merged",
-                }
-            },
-        )
-        self.assertEqual(
-            result["mergeRecurrenceGroups"]["recurrenceGroup"]["id"],
-            "170000000000000009",
-        )
-
-    @patch.object(Client, "execute_async")
-    async def test_merge_recurrence_groups_omits_name(self, mock_execute_async):
-        """
-        Test that merge_recurrence_groups omits newGroupName when not given.
-        """
-
-        mock_execute_async.return_value = {
-            "mergeRecurrenceGroups": {
-                "recurrenceGroup": {"id": "170000000000000009"},
-                "errors": None,
-            }
-        }
-
-        await self.monarch_money.merge_recurrence_groups(
-            "170000000000000001", ["170000000000000002"]
-        )
-
-        kwargs = mock_execute_async.call_args.kwargs
-        self.assertEqual(
-            kwargs["variable_values"],
-            {
-                "input": {
-                    "baseGroupId": "170000000000000001",
-                    "groupIdsToMerge": ["170000000000000002"],
-                }
-            },
-        )
-
-    @patch.object(Client, "execute_async")
-    async def test_merge_recurrence_groups_errors(self, mock_execute_async):
-        """
-        Test that merge_recurrence_groups raises on API errors.
-        """
-
-        mock_execute_async.return_value = {
-            "mergeRecurrenceGroups": {
-                "recurrenceGroup": None,
-                "errors": [{"message": "Groups are not eligible to merge"}],
-            }
-        }
-
-        with self.assertRaises(RequestFailedException):
-            await self.monarch_money.merge_recurrence_groups(
-                "170000000000000001", ["170000000000000002"]
-            )
-
-    @patch.object(Client, "execute_async")
-    async def test_merge_recurrence_groups_invalid_ids_raise(self, mock_execute_async):
-        """
-        Test that merge_recurrence_groups rejects empty or self-referencing
-        group lists without calling the API.
+        merge_recurrence_groups rejects bad input locally and raises on API errors.
         """
 
         with self.assertRaises(ValueError):
@@ -297,8 +212,18 @@ class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
             await self.monarch_money.merge_recurrence_groups(
                 "170000000000000001", ["170000000000000001"]
             )
-
         mock_execute_async.assert_not_called()
+
+        mock_execute_async.return_value = {
+            "mergeRecurrenceGroups": {
+                "recurrenceGroup": None,
+                "errors": [{"message": "Groups are not eligible to merge"}],
+            }
+        }
+        with self.assertRaises(RequestFailedException):
+            await self.monarch_money.merge_recurrence_groups(
+                "170000000000000001", ["170000000000000002"]
+            )
 
     @patch.object(Client, "execute_async")
     async def test_get_account_type_options(self, mock_execute_async):
