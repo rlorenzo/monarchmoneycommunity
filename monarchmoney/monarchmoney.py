@@ -3681,9 +3681,11 @@ class MonarchMoney(object):
         :param merchant_id: The merchant id to delete.
         :param move_to_merchant_id: Optional merchant id to move the deleted
             merchant's relations to. When given, this merges ``merchant_id``
-            into ``move_to_merchant_id`` (the web app's "Merge & delete").
-            When omitted, this is a plain delete of the merchant record with
-            nothing moved.
+            into ``move_to_merchant_id`` (the web app's "Merge & delete"):
+            the source's transactions are reassigned to the target and the
+            source merchant is removed. When omitted, the merchant record is
+            deleted with nothing moved; the web app only offers this for
+            merchants with no transactions.
         :raises ValueError: if ``move_to_merchant_id`` equals ``merchant_id``.
         """
         if move_to_merchant_id is not None and move_to_merchant_id == merchant_id:
