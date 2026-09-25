@@ -24,7 +24,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tup
 from monarchmoney import CaptchaRequiredException, MonarchMoney, RequireMFAException
 from typedmonarchmoney import TypedMonarchMoney
 
-DEFAULT_SESSION_FILE = Path(".mm") / "mm_session.pickle"
+DEFAULT_SESSION_FILE = Path.home() / ".mm" / "mm_session.json"
 DEFAULT_TERMINAL_WIDTH = 100
 MAX_TERMINAL_WIDTH = 120
 READ_METHOD_PREFIXES = ("get_", "find_", "is_", "list_", "search_")
@@ -742,7 +742,7 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--session-file",
         default=str(DEFAULT_SESSION_FILE),
-        help="saved session path (default: .mm/mm_session.pickle)",
+        help="saved session path (default: ~/.mm/mm_session.json)",
     )
     parser.add_argument(
         "--timeout",

@@ -1,5 +1,7 @@
 import os
 import pickle
+import stat
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,7 +9,11 @@ import json
 from gql import Client
 from graphql import print_ast
 from monarchmoney import MonarchMoney
-from monarchmoney.monarchmoney import LoginFailedException
+from monarchmoney.monarchmoney import (
+    SESSION_FILE,
+    LegacySessionFileException,
+    LoginFailedException,
+)
 
 
 class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
@@ -16,14 +22,14 @@ class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
         Set up any necessary data or variables for the tests here.
         This method will be called before each test method is executed.
         """
-        with open("temp_session.pickle", "wb") as fh:
+        with open("temp_session.json", "w") as fh:
             session_data = {
                 "cookies": {"test_cookie": "test_value"},
                 "token": "test_token",
             }
-            pickle.dump(session_data, fh)
+            json.dump(session_data, fh)
         self.monarch_money = MonarchMoney()
-        self.monarch_money.load_session("temp_session.pickle")
+        self.monarch_money.load_session("temp_session.json")
 
     @patch.object(Client, "execute_async")
     async def test_get_transaction_rules_includes_complete_rule_fields(
@@ -536,7 +542,7 @@ class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
         Tear down any necessary data or variables for the tests here.
         This method will be called after each test method is executed.
         """
-        self.monarch_money.delete_session("temp_session.pickle")
+        self.monarch_money.delete_session("temp_session.json")
 
 
 class TestDuplicateTransactions(unittest.IsolatedAsyncioTestCase):
@@ -591,6 +597,124 @@ class TestDuplicateTransactions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "max_pages must be positive"):
                 await client.find_duplicate_transactions(max_pages=max_pages)
         client.get_transactions.assert_not_awaited()
+
+
+class _CreatesMarkerOnUnpickle:
+    def __init__(self, path):
+        self.path = path
+
+    def __reduce__(self):
+        return (open, (self.path, "w"))
+
+
+class TestSessionFile(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.dir = temporary.name
+        self.session_file = os.path.join(self.dir, "sub", "session.json")
+
+    def test_default_session_file_is_under_home(self):
+        expected = os.path.join(os.path.expanduser("~"), ".mm", "mm_session.json")
+        self.assertEqual(SESSION_FILE, expected)
+        self.assertEqual(MonarchMoney()._session_file, expected)
+
+    def test_save_session_writes_owner_only_json(self):
+        MonarchMoney(session_file=self.session_file, token="tok").save_session()
+        self.assertEqual(stat.S_IMODE(os.stat(self.session_file).st_mode), 0o600)
+        self.assertEqual(
+            stat.S_IMODE(os.stat(os.path.dirname(self.session_file)).st_mode), 0o700
+        )
+        with open(self.session_file) as fh:
+            self.assertEqual(json.load(fh), {"token": "tok", "auth_mode": "token"})
+
+        restored = MonarchMoney(session_file=self.session_file)
+        restored.load_session()
+        self.assertEqual(restored.token, "tok")
+
+    def test_save_session_with_relative_path_in_cwd(self):
+        cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, cwd)
+        MonarchMoney(session_file="session.json", token="tok").save_session()
+        self.assertEqual(stat.S_IMODE(os.stat("session.json").st_mode), 0o600)
+
+    def test_save_session_tightens_existing_file_mode(self):
+        os.makedirs(os.path.dirname(self.session_file))
+        with open(self.session_file, "w") as fh:
+            fh.write("{}")
+        os.chmod(self.session_file, 0o644)
+        MonarchMoney(session_file=self.session_file, token="tok").save_session()
+        self.assertEqual(stat.S_IMODE(os.stat(self.session_file).st_mode), 0o600)
+
+    async def test_legacy_pickle_session_is_never_unpickled(self):
+        marker = os.path.join(self.dir, "pwned")
+        os.makedirs(os.path.dirname(self.session_file))
+        with open(self.session_file, "wb") as fh:
+            pickle.dump(_CreatesMarkerOnUnpickle(marker), fh)
+        mm = MonarchMoney(session_file=self.session_file)
+
+        with self.assertRaises(LegacySessionFileException):
+            mm.load_session()
+        self.assertFalse(os.path.exists(marker))
+
+        with patch.object(mm, "_login_user", new_callable=AsyncMock) as login_user:
+            await mm.login("user@example.com", "password", save_session=False)
+        login_user.assert_awaited_once_with("user@example.com", "password", None)
+        self.assertFalse(os.path.exists(marker))
+
+    async def test_empty_session_file_falls_through_to_credential_login(self):
+        os.makedirs(os.path.dirname(self.session_file))
+        with open(self.session_file, "w") as fh:
+            fh.write("{}")
+        mm = MonarchMoney(session_file=self.session_file)
+
+        with patch.object(mm, "_login_user", new_callable=AsyncMock) as login_user:
+            await mm.login("user@example.com", "password", save_session=False)
+        login_user.assert_awaited_once_with("user@example.com", "password", None)
+
+    @patch("monarchmoney.monarchmoney.ClientSession")
+    async def test_upload_sends_cookies_only_to_monarch_hosts(
+        self, mock_client_session
+    ):
+        response = MagicMock(status=200)
+        response.json = AsyncMock(return_value={})
+        session = MagicMock()
+        session.post = AsyncMock(return_value=response)
+        mock_client_session.return_value.__aenter__.return_value = session
+
+        mm = MonarchMoney()
+        mm.set_cookies({"session_id": "s", "csrftoken": "c"})
+        cases = {
+            "https://api.monarch.com/upload/": True,
+            "https://monarch.com.evil.example/upload/": False,
+            "https://notmonarch.com/upload/": False,
+        }
+        for url, sends_cookies in cases.items():
+            await mm._upload_form_data(url, MagicMock())
+            cookies = mock_client_session.call_args.kwargs["cookies"]
+            self.assertEqual(cookies is not None, sends_cookies, url)
+
+    @patch("monarchmoney.monarchmoney.ClientSession")
+    async def test_upload_sends_authorization_only_to_monarch_hosts(
+        self, mock_client_session
+    ):
+        response = MagicMock(status=200)
+        response.json = AsyncMock(return_value={})
+        session = MagicMock()
+        session.post = AsyncMock(return_value=response)
+        mock_client_session.return_value.__aenter__.return_value = session
+
+        mm = MonarchMoney(token="tok")
+        cases = {
+            "https://api.monarch.com/upload/": True,
+            "https://monarch.com.evil.example/upload/": False,
+            "https://notmonarch.com/upload/": False,
+        }
+        for url, sends_auth in cases.items():
+            await mm._upload_form_data(url, MagicMock())
+            headers = mock_client_session.call_args.kwargs["headers"]
+            self.assertEqual("Authorization" in headers, sends_auth, url)
 
 
 if __name__ == "__main__":

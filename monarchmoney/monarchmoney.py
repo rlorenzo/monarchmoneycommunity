@@ -6,8 +6,8 @@ import json
 import mimetypes
 import os
 import sys
-import pickle
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from io import StringIO
@@ -25,8 +25,8 @@ CSRF_KEY = "csrftoken"
 DEFAULT_RECORD_LIMIT = 100
 DEFAULT_DELAY_SECS = 10
 ERRORS_KEY = "error_code"
-SESSION_DIR = ".mm"
-SESSION_FILE = f"{SESSION_DIR}/mm_session.pickle"
+SESSION_DIR = os.path.expanduser(os.path.join("~", ".mm"))
+SESSION_FILE = os.path.join(SESSION_DIR, "mm_session.json")
 DEFAULT_TIMEOUT_SECS = 300
 
 REQUIRED_COOKIES = ("session_id", "csrftoken")
@@ -85,6 +85,10 @@ class RequestFailedException(Exception):
 
 class CaptchaRequiredException(LoginFailedException):
     pass
+
+
+class LegacySessionFileException(LoginFailedException):
+    """The session file is not JSON (e.g. an old pickle) and was not loaded."""
 
 
 def _to_iso_date(
@@ -213,8 +217,11 @@ class MonarchMoney(object):
         """Logs into a Monarch Money account."""
         if use_saved_session and os.path.exists(self._session_file):
             print(f"Using saved session found at {self._session_file}", file=sys.stderr)
-            self.load_session(self._session_file)
-            return
+            try:
+                self.load_session(self._session_file)
+                return
+            except (LegacySessionFileException, LoginFailedException) as e:
+                print(str(e), file=sys.stderr)
 
         if (email is None) or (password is None) or (email == "") or (password == ""):
             raise LoginFailedException(
@@ -244,11 +251,16 @@ class MonarchMoney(object):
         headers.pop("Accept", None)
         headers.pop("Content-Type", None)
 
-        if "monarch.com" in url:
+        host = urllib.parse.urlparse(url).hostname or ""
+        if host == "monarch.com" or host.endswith(".monarch.com"):
             cookies = self._cookies if self._auth_mode == "cookie" else None
         else:
             cookies = None
-            for key in list(MONARCH_COOKIE_HEADERS) + ["X-Csrftoken"]:
+            for key in list(MONARCH_COOKIE_HEADERS) + [
+                "X-Csrftoken",
+                "Authorization",
+                AUTH_HEADER_KEY,
+            ]:
                 headers.pop(key, None)
         async with ClientSession(
             headers=headers, cookies=cookies, trust_env=True
@@ -4041,17 +4053,34 @@ class MonarchMoney(object):
         if self._cookies:
             session_data["cookies"] = self._cookies
 
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        with open(filename, "wb") as fh:
-            pickle.dump(session_data, fh)
+        # The file holds a bearer credential: keep it owner-only.
+        dirname = os.path.dirname(filename)
+        if dirname:
+            os.makedirs(dirname, mode=0o700, exist_ok=True)
+        fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(session_data, fh)
+        if not hasattr(os, "fchmod"):
+            os.chmod(filename, 0o600)
 
     def load_session(self, filename: Optional[str] = None) -> None:
-        """Loads auth credentials from a pickle file."""
+        """Loads auth credentials from a JSON session file."""
         if filename is None:
             filename = self._session_file
 
+        # Never unpickle: older versions wrote pickle files, which can run code.
         with open(filename, "rb") as fh:
-            data = pickle.load(fh)
+            try:
+                data = json.loads(fh.read())
+            except ValueError:
+                data = None
+        if not isinstance(data, dict):
+            raise LegacySessionFileException(
+                f"Legacy or invalid session file ignored at {filename}; "
+                "please log in again."
+            )
 
         auth_mode = data.get("auth_mode", "token")
 

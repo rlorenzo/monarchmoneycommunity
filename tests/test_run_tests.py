@@ -198,7 +198,7 @@ class TestSessionAuthenticator(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.session_file = Path(temporary.name) / "session.pickle"
+        self.session_file = Path(temporary.name) / "session.json"
         self.client = MonarchMoney(session_file=str(self.session_file))
         self.authenticator = SessionAuthenticator(self.session_file)
         environment = patch.dict(os.environ, {}, clear=True)
