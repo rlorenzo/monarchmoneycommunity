@@ -3670,6 +3670,46 @@ class MonarchMoney(object):
             variables=variables,
         )
 
+    async def delete_merchant(
+        self, merchant_id: str, move_to_merchant_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Deletes a merchant, optionally merging it into another merchant first.
+
+        This is the "Merge & delete" action in Monarch's Edit merchant dialog.
+
+        :param merchant_id: The merchant id to delete.
+        :param move_to_merchant_id: Optional merchant id to move the deleted
+            merchant's relations to. When given, this merges ``merchant_id``
+            into ``move_to_merchant_id`` (the web app's "Merge & delete").
+            When omitted, this is a plain delete of the merchant record with
+            nothing moved.
+        :raises ValueError: if ``move_to_merchant_id`` equals ``merchant_id``.
+        """
+        if move_to_merchant_id is not None and move_to_merchant_id == merchant_id:
+            raise ValueError("move_to_merchant_id must differ from merchant_id")
+
+        query = gql(
+            """
+            mutation Common_DeleteMerchant($merchantId: ID!, $moveToId: ID) {
+              deleteMerchant(id: $merchantId, moveRelationsToMerchantId: $moveToId) {
+                success
+                __typename
+              }
+            }
+            """
+        )
+
+        variables: Dict[str, Any] = {"merchantId": merchant_id}
+        if move_to_merchant_id is not None:
+            variables["moveToId"] = move_to_merchant_id
+
+        return await self.gql_call(
+            operation="Common_DeleteMerchant",
+            graphql_query=query,
+            variables=variables,
+        )
+
     async def get_recurring_transactions(
         self,
         start_date: Optional[str] = None,

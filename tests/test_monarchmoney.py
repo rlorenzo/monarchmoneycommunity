@@ -201,6 +201,79 @@ class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["deleteAccount"]["errors"], None)
 
     @patch.object(Client, "execute_async")
+    async def test_delete_merchant(self, mock_execute_async):
+        """
+        Test the delete_merchant method without a merge target.
+        """
+
+        mock_execute_async.return_value = {
+            "deleteMerchant": {
+                "success": True,
+                "__typename": "DeleteMerchantMutation",
+            }
+        }
+
+        result = await self.monarch_money.delete_merchant("170000000000000001")
+
+        mock_execute_async.assert_called_once()
+
+        kwargs = mock_execute_async.call_args.kwargs
+        self.assertEqual(kwargs["operation_name"], "Common_DeleteMerchant")
+        self.assertEqual(
+            kwargs["variable_values"], {"merchantId": "170000000000000001"}
+        )
+
+        self.assertIsNotNone(result, "Expected result to not be None")
+        self.assertEqual(result["deleteMerchant"]["success"], True)
+
+    @patch.object(Client, "execute_async")
+    async def test_delete_merchant_with_merge(self, mock_execute_async):
+        """
+        Test the delete_merchant method merging into another merchant.
+        """
+
+        mock_execute_async.return_value = {
+            "deleteMerchant": {
+                "success": True,
+                "__typename": "DeleteMerchantMutation",
+            }
+        }
+
+        result = await self.monarch_money.delete_merchant(
+            "170000000000000001", move_to_merchant_id="170000000000000002"
+        )
+
+        mock_execute_async.assert_called_once()
+
+        kwargs = mock_execute_async.call_args.kwargs
+        self.assertEqual(kwargs["operation_name"], "Common_DeleteMerchant")
+        self.assertEqual(
+            kwargs["variable_values"],
+            {
+                "merchantId": "170000000000000001",
+                "moveToId": "170000000000000002",
+            },
+        )
+
+        self.assertIsNotNone(result, "Expected result to not be None")
+        self.assertEqual(result["deleteMerchant"]["success"], True)
+
+    @patch.object(Client, "execute_async")
+    async def test_delete_merchant_same_id_raises(self, mock_execute_async):
+        """
+        Test that delete_merchant raises ValueError when move_to_merchant_id
+        equals merchant_id, without calling the API.
+        """
+
+        with self.assertRaises(ValueError):
+            await self.monarch_money.delete_merchant(
+                "170000000000000001",
+                move_to_merchant_id="170000000000000001",
+            )
+
+        mock_execute_async.assert_not_called()
+
+    @patch.object(Client, "execute_async")
     async def test_get_account_type_options(self, mock_execute_async):
         """
         Test the get_account_type_options method.
