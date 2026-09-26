@@ -215,6 +215,18 @@ As of writing this README, the following methods are supported:
       <td>gets cashflow summary (income, expense, savings, savings rate)</td>
     </tr>
     <tr>
+      <td><code>get_savings_goals</code></td>
+      <td>gets all Savings Goals, including archived ones (filter on <code>status == "archived"</code> or <code>archivedAt</code>)</td>
+    </tr>
+    <tr>
+      <td><code>get_savings_goal</code></td>
+      <td>gets a single Savings Goal by id</td>
+    </tr>
+    <tr>
+      <td><code>get_goal_options</code></td>
+      <td>gets the preset Savings Goal templates (Emergency fund, Down payment, Custom, ...)</td>
+    </tr>
+    <tr>
       <td><code>is_accounts_refresh_complete</code></td>
       <td>gets the status of a running account refresh</td>
     </tr>

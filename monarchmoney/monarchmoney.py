@@ -3712,6 +3712,233 @@ class MonarchMoney(object):
             variables=variables,
         )
 
+    async def get_savings_goals(self) -> Dict[str, Any]:
+        """
+        Gets all Savings Goals in the household (the Goals page "Save up" tab).
+
+        Archived goals are returned too; there is no filter variable, so
+        callers filter on ``status == "archived"`` or a non-null
+        ``archivedAt``.
+
+        This covers Savings Goals only. Legacy goals are the ``goalsV2``
+        field returned by ``get_budgets``.
+        """
+        query = gql(
+            """
+            query Common_SavingsGoals {
+              savingsGoals {
+                ...GoalSummaryFields
+                __typename
+              }
+            }
+
+            fragment GoalSummaryFields on SavingsGoal {
+              id
+              type
+              name
+              createdAt
+              archivedAt
+              imageStorageProvider
+              imageStorageProviderId
+              status
+              progress
+              currentBalance
+              targetDate
+              targetAmount
+              hasFutureBudgetDifferentFromCurrentMonth
+              currentMonthActualBudgetAmount
+              currentMonthPlannedContributionAmount
+              plannedMonthlyContribution
+              spendingTotal
+              netContribution
+              netContributionWithSpending
+              netContributionWithoutSpending
+              balanceThisMonth
+              estimatedMonthsUntilCompletion
+              forecastedCompletionDate
+              isSinkingFund
+              priority
+              allocationAmountsByAccount {
+                goalId
+                adjustmentAmount
+                totalAmount
+                spendingAmount
+                contributionsAmount
+                withdrawalsAmount
+                account {
+                  icon
+                  displayName
+                  displayBalance
+                  linkedGoal {
+                    id
+                    __typename
+                  }
+                  subtype {
+                    name
+                    display
+                    __typename
+                  }
+                  ...NewAccountLogoFields
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+
+            fragment NewAccountLogoFields on Account {
+              id
+              dataProvider
+              logoUrl
+              type {
+                name
+                display
+                __typename
+              }
+              subtype {
+                name
+                __typename
+              }
+              institution {
+                id
+                primaryColor
+                __typename
+              }
+              __typename
+            }
+            """
+        )
+
+        return await self.gql_call(
+            operation="Common_SavingsGoals",
+            graphql_query=query,
+        )
+
+    async def get_savings_goal(self, goal_id: str) -> Dict[str, Any]:
+        """
+        Gets a single Savings Goal by id.
+
+        :param goal_id: The savings goal id.
+        """
+        query = gql(
+            """
+            query Common_SavingsGoal($id: ID!) {
+              savingsGoal(id: $id) {
+                ...GoalSummaryFields
+                __typename
+              }
+            }
+
+            fragment GoalSummaryFields on SavingsGoal {
+              id
+              type
+              name
+              createdAt
+              archivedAt
+              imageStorageProvider
+              imageStorageProviderId
+              status
+              progress
+              currentBalance
+              targetDate
+              targetAmount
+              hasFutureBudgetDifferentFromCurrentMonth
+              currentMonthActualBudgetAmount
+              currentMonthPlannedContributionAmount
+              plannedMonthlyContribution
+              spendingTotal
+              netContribution
+              netContributionWithSpending
+              netContributionWithoutSpending
+              balanceThisMonth
+              estimatedMonthsUntilCompletion
+              forecastedCompletionDate
+              isSinkingFund
+              priority
+              allocationAmountsByAccount {
+                goalId
+                adjustmentAmount
+                totalAmount
+                spendingAmount
+                contributionsAmount
+                withdrawalsAmount
+                account {
+                  icon
+                  displayName
+                  displayBalance
+                  linkedGoal {
+                    id
+                    __typename
+                  }
+                  subtype {
+                    name
+                    display
+                    __typename
+                  }
+                  ...NewAccountLogoFields
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+
+            fragment NewAccountLogoFields on Account {
+              id
+              dataProvider
+              logoUrl
+              type {
+                name
+                display
+                __typename
+              }
+              subtype {
+                name
+                __typename
+              }
+              institution {
+                id
+                primaryColor
+                __typename
+              }
+              __typename
+            }
+            """
+        )
+
+        return await self.gql_call(
+            operation="Common_SavingsGoal",
+            graphql_query=query,
+            variables={"id": goal_id},
+        )
+
+    async def get_goal_options(self) -> Dict[str, Any]:
+        """
+        Gets the preset Savings Goal templates offered when creating a goal
+        (e.g. Emergency fund, Down payment, Custom), with their default names,
+        objectives, types and images.
+        """
+        query = gql(
+            """
+            query Common_GoalOptions {
+              goalOptions {
+                defaultName
+                objective
+                type
+                allowMultiSelect
+                defaultImageStorageProvider
+                defaultImageStorageProviderId
+                __typename
+              }
+            }
+            """
+        )
+
+        return await self.gql_call(
+            operation="Common_GoalOptions",
+            graphql_query=query,
+        )
+
     async def get_recurring_transactions(
         self,
         start_date: Optional[str] = None,
