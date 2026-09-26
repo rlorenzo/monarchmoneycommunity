@@ -155,6 +155,10 @@ As of writing this README, the following methods are supported:
       <td>all the budgets and the corresponding actual amounts</td>
     </tr>
     <tr>
+      <td><code>get_savings_goal_budget_amounts</code></td>
+      <td>gets a savings goal's planned, actual, and remaining amounts per month (with per-account breakdown) between two months</td>
+    </tr>
+    <tr>
       <td><code>get_credit_history</code></td>
       <td>gets credit score snapshots and Spinwheel user details</td>
     </tr>
@@ -282,6 +286,10 @@ As of writing this README, the following methods are supported:
     <tr>
       <td><code>unarchive_savings_goal</code></td>
       <td>unarchives a savings goal by id (funds withdrawn on archive are not restored)</td>
+    </tr>
+    <tr>
+      <td><code>set_savings_goal_budget_amount</code></td>
+      <td>sets a savings goal's planned contribution for a month (applies to future months by default). Pass <code>account_id</code> for a per-account contribution; omit it for the general contribution</td>
     </tr>
     <tr>
       <td><code>update_reoccuring</code></td>

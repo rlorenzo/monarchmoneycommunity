@@ -4010,6 +4010,125 @@ class MonarchMoney(object):
             variables={"input": {"id": goal_id}},
         )
 
+    async def set_savings_goal_budget_amount(
+        self,
+        goal_id: str,
+        month: Union[date, datetime, str],
+        amount: float,
+        apply_to_future: bool = True,
+        account_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Sets a savings goal's planned monthly contribution (its budget line).
+
+        :param goal_id: The savings goal id.
+        :param month: The month to set, as a date, datetime, or
+            ``YYYY-MM-DD`` string. Any day in the month is accepted and
+            normalized to the first of the month.
+        :param amount: The planned contribution amount.
+        :param apply_to_future: Also apply the amount to later months
+            (the web app's default).
+        :param account_id: The account for a per-account planned
+            contribution. Omit for the goal's "General contribution".
+        """
+        query = gql(
+            """
+            mutation Common_SetSavingsGoalBudgetAmount($input: SetSavingsGoalBudgetAmountInput!) {
+              setSavingsGoalBudgetAmount(input: $input) {
+                success
+                errors {
+                  ...PayloadErrorFields
+                  __typename
+                }
+                __typename
+              }
+            }
+            fragment PayloadErrorFields on PayloadError {
+              fieldErrors {
+                field
+                messages
+                __typename
+              }
+              message
+              code
+              __typename
+            }
+            """
+        )
+
+        variables = {
+            "input": {
+                "month": _to_iso_date(month)[:7] + "-01",
+                "savingsGoalId": goal_id,
+                "amount": amount,
+                "applyToFuture": apply_to_future,
+                "accountId": account_id,
+            }
+        }
+
+        return await self.gql_call(
+            operation="Common_SetSavingsGoalBudgetAmount",
+            graphql_query=query,
+            variables=variables,
+        )
+
+    async def get_savings_goal_budget_amounts(
+        self,
+        goal_id: str,
+        start_month: Union[date, datetime, str],
+        end_month: Union[date, datetime, str],
+    ) -> Dict[str, Any]:
+        """
+        Gets a savings goal's monthly budget amounts (planned, actual, and
+        remaining, with a per-account breakdown) for a range of months.
+
+        :param goal_id: The savings goal id.
+        :param start_month: The first month, as a date, datetime, or
+            ``YYYY-MM-DD`` string. Any day in the month is accepted and
+            normalized to the first of the month.
+        :param end_month: The last month, normalized the same way.
+        """
+        query = gql(
+            """
+            query Common_SavingsGoalBudgetAmounts($goalId: ID!, $startMonth: Date!, $endMonth: Date!) {
+              savingsGoal(id: $goalId) {
+                id
+                monthlyBudgetAmounts(startMonth: $startMonth, endMonth: $endMonth) {
+                  id
+                  month
+                  plannedAmount
+                  actualAmount
+                  remainingAmount
+                  accountBreakdown {
+                    id
+                    account {
+                      id
+                      growthRate
+                      __typename
+                    }
+                    remainingAmount
+                    __typename
+                  }
+                  __typename
+                }
+                __typename
+              }
+            }
+            """
+        )
+
+        variables = {
+            "goalId": goal_id,
+            "startMonth": _to_iso_date(start_month)[:7] + "-01",
+            "endMonth": _to_iso_date(end_month)[:7] + "-01",
+        }
+
+        return await self.gql_call(
+            operation="Common_SavingsGoalBudgetAmounts",
+            graphql_query=query,
+            variables=variables,
+        )
+
     async def get_recurring_transactions(
         self,
         start_date: Optional[str] = None,
