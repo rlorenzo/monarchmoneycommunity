@@ -276,6 +276,14 @@ As of writing this README, the following methods are supported:
       <td>deletes a merchant by id. Pass <code>move_to_merchant_id</code> to merge it into another merchant first (Monarch's "Merge &amp; delete"), e.g. <code>await mm.delete_merchant("170000000000000001", move_to_merchant_id="170000000000000002")</code></td>
     </tr>
     <tr>
+      <td><code>archive_savings_goal</code></td>
+      <td>archives a savings goal by id. Monarch withdraws the goal's allocated funds and removes it from future budgets; history is kept</td>
+    </tr>
+    <tr>
+      <td><code>unarchive_savings_goal</code></td>
+      <td>unarchives a savings goal by id (funds withdrawn on archive are not restored)</td>
+    </tr>
+    <tr>
       <td><code>update_reoccuring</code></td>
       <td>updates recurring merchant settings (frequency, amount, date, active status)</td>
     </tr>
