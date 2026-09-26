@@ -231,6 +231,14 @@ As of writing this README, the following methods are supported:
       <td>gets the preset Savings Goal templates (Emergency fund, Down payment, Custom, ...)</td>
     </tr>
     <tr>
+      <td><code>get_savings_goal_events</code></td>
+      <td>gets a Savings Goal's paginated event history (contributions, withdrawals), optionally filtered by <code>start_date</code>/<code>end_date</code></td>
+    </tr>
+    <tr>
+      <td><code>get_goal_accounts_allocation_summary</code></td>
+      <td>gets each goal account's total balance, unallocated balance, and split by Savings Goal</td>
+    </tr>
+    <tr>
       <td><code>is_accounts_refresh_complete</code></td>
       <td>gets the status of a running account refresh</td>
     </tr>

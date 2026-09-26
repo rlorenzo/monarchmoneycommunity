@@ -4129,6 +4129,289 @@ class MonarchMoney(object):
             variables=variables,
         )
 
+    async def get_savings_goal_events(
+        self,
+        goal_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        start_date: Optional[Union[date, datetime, str]] = None,
+        end_date: Optional[Union[date, datetime, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Gets the paginated event history (contributions, withdrawals, etc.)
+        for a savings goal.
+
+        :param goal_id: The savings goal id.
+        :param limit: The maximum number of events to return.
+        :param offset: The number of events to skip before returning results.
+        :param start_date: Optional earliest event date (date, datetime, or
+            "yyyy-mm-dd"). Omitted from the request when not given.
+        :param end_date: Optional latest event date (date, datetime, or
+            "yyyy-mm-dd"). Omitted from the request when not given.
+        """
+        query = gql(
+            """
+            query Common_SavingsGoalEventsPaginated($id: ID!, $limit: Int, $offset: Int, $startDate: Date, $endDate: Date) {
+              savingsGoal(id: $id) {
+                id
+                name
+                imageStorageProvider
+                imageStorageProviderId
+                goalEventsPaginated(limit: $limit, offset: $offset, startDate: $startDate, endDate: $endDate) {
+                  events {
+                    ...GoalEventFields
+                    __typename
+                  }
+                  totalEventCount
+                  hasMoreEvents
+                  nextOffset
+                  __typename
+                }
+                __typename
+              }
+            }
+
+            fragment GoalEventFields on GoalEvent {
+              id
+              date
+              amount
+              type
+              createdAt
+              canDelete
+              includeInBudget
+              notes
+              account {
+                icon
+                displayName
+                ...NewAccountLogoFields
+                __typename
+              }
+              transaction {
+                ...TransactionOverviewFields
+                __typename
+              }
+              __typename
+            }
+
+            fragment NewAccountLogoFields on Account {
+              id
+              dataProvider
+              logoUrl
+              type {
+                name
+                display
+                __typename
+              }
+              subtype {
+                name
+                __typename
+              }
+              institution {
+                id
+                primaryColor
+                __typename
+              }
+              __typename
+            }
+
+            fragment TransactionOverviewFields on Transaction {
+              id
+              ownedByUser {
+                id
+                name
+                __typename
+              }
+              ownershipOverriddenAt
+              amount
+              pending
+              date
+              hideFromReports
+              plaidName
+              notes
+              isRecurring
+              reviewStatus
+              needsReview
+              attachments {
+                id
+                extension
+                filename
+                originalAssetUrl
+                publicId
+                sizeBytes
+                __typename
+              }
+              isSplitTransaction
+              createdAt
+              updatedAt
+              category {
+                id
+                name
+                __typename
+              }
+              merchant {
+                name
+                id
+                transactionsCount
+                __typename
+              }
+              account {
+                id
+                displayName
+                __typename
+              }
+              businessEntity {
+                id
+                name
+                __typename
+              }
+              tags {
+                id
+                name
+                color
+                order
+                __typename
+              }
+              savingsGoalEvent {
+                id
+                goal {
+                  id
+                  name
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+            """
+        )
+
+        variables: Dict[str, Any] = {"id": goal_id, "limit": limit, "offset": offset}
+        if start_date is not None:
+            variables["startDate"] = _to_iso_date(start_date)
+        if end_date is not None:
+            variables["endDate"] = _to_iso_date(end_date)
+
+        return await self.gql_call(
+            operation="Common_SavingsGoalEventsPaginated",
+            graphql_query=query,
+            variables=variables,
+        )
+
+    async def get_goal_accounts_allocation_summary(self) -> Dict[str, Any]:
+        """
+        Gets, per account, the total balance, the balance not yet allocated
+        to any savings goal, and the split of the balance by goal.
+        """
+        query = gql(
+            """
+            query Common_SavingsGoalAccountsAllocationSummary {
+              goalAccountsAllocationSummary {
+                account {
+                  id
+                  logoUrl
+                  icon
+                  displayName
+                  balanceNeedingReconciliation
+                  __typename
+                }
+                totalBalance
+                availableBalance
+                balancesByGoal {
+                  accountId
+                  goal {
+                    id
+                    ...GoalSummaryFields
+                    __typename
+                  }
+                  amount
+                  __typename
+                }
+                __typename
+              }
+            }
+
+            fragment GoalSummaryFields on SavingsGoal {
+              id
+              type
+              name
+              createdAt
+              archivedAt
+              imageStorageProvider
+              imageStorageProviderId
+              status
+              progress
+              currentBalance
+              targetDate
+              targetAmount
+              hasFutureBudgetDifferentFromCurrentMonth
+              currentMonthActualBudgetAmount
+              currentMonthPlannedContributionAmount
+              plannedMonthlyContribution
+              spendingTotal
+              netContribution
+              netContributionWithSpending
+              netContributionWithoutSpending
+              balanceThisMonth
+              estimatedMonthsUntilCompletion
+              forecastedCompletionDate
+              isSinkingFund
+              priority
+              allocationAmountsByAccount {
+                goalId
+                adjustmentAmount
+                totalAmount
+                spendingAmount
+                contributionsAmount
+                withdrawalsAmount
+                account {
+                  icon
+                  displayName
+                  displayBalance
+                  linkedGoal {
+                    id
+                    __typename
+                  }
+                  subtype {
+                    name
+                    display
+                    __typename
+                  }
+                  ...NewAccountLogoFields
+                  __typename
+                }
+                __typename
+              }
+              __typename
+            }
+
+            fragment NewAccountLogoFields on Account {
+              id
+              dataProvider
+              logoUrl
+              type {
+                name
+                display
+                __typename
+              }
+              subtype {
+                name
+                __typename
+              }
+              institution {
+                id
+                primaryColor
+                __typename
+              }
+              __typename
+            }
+            """
+        )
+
+        return await self.gql_call(
+            operation="Common_SavingsGoalAccountsAllocationSummary",
+            graphql_query=query,
+        )
+
     async def get_recurring_transactions(
         self,
         start_date: Optional[str] = None,
