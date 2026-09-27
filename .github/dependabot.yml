@@ -10,3 +10,10 @@ updates:
     commit-message:
       prefix: "[pip] "
       include: "scope"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    target-branch: "dev"
+    commit-message:
+      prefix: "[actions] "

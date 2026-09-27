@@ -1,5 +1,8 @@
 import os
 import pickle
+import shutil
+import stat
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -7,7 +10,13 @@ import json
 from gql import Client
 from graphql import print_ast
 from monarchmoney import MonarchMoney
-from monarchmoney.monarchmoney import LoginFailedException
+from monarchmoney.monarchmoney import (
+    LEGACY_SESSION_FILE,
+    MONARCH_COOKIE_HEADERS,
+    SESSION_FILE,
+    LegacySessionFileException,
+    LoginFailedException,
+)
 
 
 class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
@@ -16,14 +25,14 @@ class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
         Set up any necessary data or variables for the tests here.
         This method will be called before each test method is executed.
         """
-        with open("temp_session.pickle", "wb") as fh:
+        with open("temp_session.json", "w") as fh:
             session_data = {
                 "cookies": {"test_cookie": "test_value"},
                 "token": "test_token",
             }
-            pickle.dump(session_data, fh)
+            json.dump(session_data, fh)
         self.monarch_money = MonarchMoney()
-        self.monarch_money.load_session("temp_session.pickle")
+        self.monarch_money.load_session("temp_session.json")
 
     @patch.object(Client, "execute_async")
     async def test_get_transaction_rules_includes_complete_rule_fields(
@@ -536,7 +545,7 @@ class TestMonarchMoney(unittest.IsolatedAsyncioTestCase):
         Tear down any necessary data or variables for the tests here.
         This method will be called after each test method is executed.
         """
-        self.monarch_money.delete_session("temp_session.pickle")
+        self.monarch_money.delete_session("temp_session.json")
 
 
 class TestDuplicateTransactions(unittest.IsolatedAsyncioTestCase):
@@ -591,6 +600,254 @@ class TestDuplicateTransactions(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, "max_pages must be positive"):
                 await client.find_duplicate_transactions(max_pages=max_pages)
         client.get_transactions.assert_not_awaited()
+
+
+class _CreatesMarkerOnUnpickle:
+    def __init__(self, path):
+        self.path = path
+
+    def __reduce__(self):
+        return (open, (self.path, "w"))
+
+
+class TestSessionFile(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.dir = temporary.name
+        self.session_file = os.path.join(self.dir, "sub", "session.json")
+
+    def test_default_session_file_is_under_home(self):
+        expected = os.path.join(os.path.expanduser("~"), ".mm", "mm_session.json")
+        self.assertEqual(SESSION_FILE, expected)
+        self.assertEqual(MonarchMoney()._session_file, expected)
+
+    def test_save_session_writes_owner_only_json(self):
+        MonarchMoney(session_file=self.session_file, token="tok").save_session()
+        self.assertEqual(stat.S_IMODE(os.stat(self.session_file).st_mode), 0o600)
+        self.assertEqual(
+            stat.S_IMODE(os.stat(os.path.dirname(self.session_file)).st_mode), 0o700
+        )
+        with open(self.session_file) as fh:
+            self.assertEqual(json.load(fh), {"token": "tok", "auth_mode": "token"})
+
+        restored = MonarchMoney(session_file=self.session_file)
+        restored.load_session()
+        self.assertEqual(restored.token, "tok")
+
+    def test_save_session_with_relative_path_in_cwd(self):
+        cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, cwd)
+        MonarchMoney(session_file="session.json", token="tok").save_session()
+        self.assertEqual(stat.S_IMODE(os.stat("session.json").st_mode), 0o600)
+
+    def test_save_session_tightens_existing_file_mode(self):
+        os.makedirs(os.path.dirname(self.session_file))
+        with open(self.session_file, "w") as fh:
+            fh.write("{}")
+        os.chmod(self.session_file, 0o644)
+        MonarchMoney(session_file=self.session_file, token="tok").save_session()
+        self.assertEqual(stat.S_IMODE(os.stat(self.session_file).st_mode), 0o600)
+
+    @unittest.skipUnless(
+        hasattr(os, "O_NOFOLLOW"), "platform has no O_NOFOLLOW to guard against"
+    )
+    def test_save_session_refuses_to_follow_symlink(self):
+        # A symlink planted at the session path (e.g. by another local user
+        # in a shared writable directory) must not be followed: doing so
+        # would write the bearer token to the link's target and chmod it.
+        os.makedirs(os.path.dirname(self.session_file))
+        target = os.path.join(self.dir, "target")
+        with open(target, "w") as fh:
+            fh.write("untouched")
+        os.chmod(target, 0o644)
+        os.symlink(target, self.session_file)
+
+        with self.assertRaises(OSError):
+            MonarchMoney(session_file=self.session_file, token="tok").save_session()
+
+        with open(target) as fh:
+            self.assertEqual(fh.read(), "untouched")
+        self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o644)
+
+    def test_session_paths_expand_tilde(self):
+        # Both the constructor's session_file and an explicit filename passed
+        # directly to save_session/load_session/delete_session should expand
+        # a leading ~ instead of being treated as a literal relative path.
+        with patch.dict(os.environ, {"HOME": self.dir}):
+            tilde_path = os.path.join("~", "sub", "tilde_session.json")
+            expanded = os.path.join(self.dir, "sub", "tilde_session.json")
+
+            MonarchMoney(session_file=tilde_path, token="tok").save_session()
+            self.assertTrue(os.path.exists(expanded))
+
+            restored = MonarchMoney(session_file=tilde_path)
+            restored.load_session()
+            self.assertEqual(restored.token, "tok")
+
+            other_path = os.path.join("~", "sub", "tilde_session2.json")
+            other_expanded = os.path.join(self.dir, "sub", "tilde_session2.json")
+            MonarchMoney(token="tok2").save_session(other_path)
+            self.assertTrue(os.path.exists(other_expanded))
+
+            loader = MonarchMoney()
+            loader.load_session(other_path)
+            self.assertEqual(loader.token, "tok2")
+
+            loader.delete_session(other_path)
+            self.assertFalse(os.path.exists(other_expanded))
+
+    def test_relative_session_path_survives_cwd_change(self):
+        # A relative session_file is resolved to an absolute path up front
+        # (at construction), so save/load/delete still agree on the same
+        # file even if the process later changes its working directory.
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        other_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, other_dir, ignore_errors=True)
+
+        os.chdir(self.dir)
+        mm = MonarchMoney(session_file="session.json", token="tok")
+        expected = mm._resolve_session_path()
+        self.assertTrue(os.path.isabs(expected))
+        mm.save_session()
+        self.assertTrue(os.path.exists(expected))
+
+        os.chdir(other_dir)
+        self.assertEqual(mm._resolve_session_path(), expected)
+        restored = mm
+        restored.load_session()
+        self.assertEqual(restored.token, "tok")
+        restored.delete_session()
+        self.assertFalse(os.path.exists(expected))
+
+    async def test_legacy_pickle_session_is_never_unpickled(self):
+        marker = os.path.join(self.dir, "pwned")
+        os.makedirs(os.path.dirname(self.session_file))
+        with open(self.session_file, "wb") as fh:
+            pickle.dump(_CreatesMarkerOnUnpickle(marker), fh)
+        mm = MonarchMoney(session_file=self.session_file)
+
+        with self.assertRaises(LegacySessionFileException):
+            mm.load_session()
+        self.assertFalse(os.path.exists(marker))
+
+        with patch.object(mm, "_login_user", new_callable=AsyncMock) as login_user:
+            await mm.login("user@example.com", "password", save_session=False)
+        login_user.assert_awaited_once_with("user@example.com", "password", None)
+        self.assertFalse(os.path.exists(marker))
+
+        # A legacy pickle sitting at the exact old default location
+        # (./.mm/mm_session.pickle, relative to cwd) is warned about and never
+        # read, even though it isn't the session_file this client is configured
+        # to use.
+        cwd = os.getcwd()
+        self.addCleanup(os.chdir, cwd)
+        os.chdir(self.dir)
+        legacy_marker = os.path.join(self.dir, "legacy_pwned")
+        os.makedirs(os.path.dirname(LEGACY_SESSION_FILE))
+        with open(LEGACY_SESSION_FILE, "wb") as fh:
+            pickle.dump(_CreatesMarkerOnUnpickle(legacy_marker), fh)
+
+        other = MonarchMoney(
+            session_file=os.path.join(self.dir, "other", "session.json")
+        )
+        with self.assertLogs("monarchmoney.monarchmoney", level="WARNING") as logs:
+            with patch.object(
+                other, "_login_user", new_callable=AsyncMock
+            ) as login_user2:
+                await other.login("user@example.com", "password", save_session=False)
+        login_user2.assert_awaited_once_with("user@example.com", "password", None)
+        self.assertFalse(os.path.exists(legacy_marker))
+        self.assertTrue(
+            any(os.path.abspath(LEGACY_SESSION_FILE) in msg for msg in logs.output)
+        )
+
+    async def test_empty_session_file_falls_through_to_credential_login(self):
+        os.makedirs(os.path.dirname(self.session_file))
+        with open(self.session_file, "w") as fh:
+            fh.write("{}")
+        mm = MonarchMoney(session_file=self.session_file)
+
+        with patch.object(mm, "_login_user", new_callable=AsyncMock) as login_user:
+            await mm.login("user@example.com", "password", save_session=False)
+        login_user.assert_awaited_once_with("user@example.com", "password", None)
+
+    async def test_invalid_session_in_cookie_mode_resets_to_token_before_login(self):
+        # A client already in cookie mode (e.g. from a previous run) whose saved
+        # session file is invalid/legacy must not stay in cookie mode once it
+        # falls through to a fresh credential login: the stale cookies/headers
+        # must be cleared and auth mode set to token before _login_user runs.
+        os.makedirs(os.path.dirname(self.session_file))
+        with open(self.session_file, "w") as fh:
+            fh.write("not json")
+        mm = MonarchMoney(session_file=self.session_file)
+        mm.set_cookies({"session_id": "stale", "csrftoken": "stale-csrf"})
+        self.assertEqual(mm._auth_mode, "cookie")
+
+        async def login_user(email, password, mfa_secret_key):
+            mm.set_token("fresh-token")
+            mm._headers["Authorization"] = "Token fresh-token"
+
+        with patch.object(mm, "_login_user", side_effect=login_user) as login:
+            await mm.login("user@example.com", "password", save_session=True)
+        login.assert_awaited_once_with("user@example.com", "password", None)
+
+        self.assertEqual(mm._auth_mode, "token")
+        self.assertIsNone(mm._cookies)
+        self.assertNotIn("X-Csrftoken", mm._headers)
+        self.assertNotIn("Cookie", mm._headers)
+        for key in MONARCH_COOKIE_HEADERS:
+            self.assertNotIn(key, mm._headers)
+
+        with open(self.session_file) as fh:
+            saved = json.load(fh)
+        self.assertEqual(saved["auth_mode"], "token")
+        self.assertNotIn("cookies", saved)
+
+    @patch("monarchmoney.monarchmoney.ClientSession")
+    async def test_upload_sends_cookies_only_to_monarch_hosts(
+        self, mock_client_session
+    ):
+        response = MagicMock(status=200)
+        response.json = AsyncMock(return_value={})
+        session = MagicMock()
+        session.post = AsyncMock(return_value=response)
+        mock_client_session.return_value.__aenter__.return_value = session
+
+        mm = MonarchMoney()
+        mm.set_cookies({"session_id": "s", "csrftoken": "c"})
+        cases = {
+            "https://api.monarch.com/upload/": True,
+            "https://monarch.com.evil.example/upload/": False,
+            "https://notmonarch.com/upload/": False,
+        }
+        for url, sends_cookies in cases.items():
+            await mm._upload_form_data(url, MagicMock())
+            cookies = mock_client_session.call_args.kwargs["cookies"]
+            self.assertEqual(cookies is not None, sends_cookies, url)
+
+    @patch("monarchmoney.monarchmoney.ClientSession")
+    async def test_upload_sends_authorization_only_to_monarch_hosts(
+        self, mock_client_session
+    ):
+        response = MagicMock(status=200)
+        response.json = AsyncMock(return_value={})
+        session = MagicMock()
+        session.post = AsyncMock(return_value=response)
+        mock_client_session.return_value.__aenter__.return_value = session
+
+        mm = MonarchMoney(token="tok")
+        cases = {
+            "https://api.monarch.com/upload/": True,
+            "https://monarch.com.evil.example/upload/": False,
+            "https://notmonarch.com/upload/": False,
+        }
+        for url, sends_auth in cases.items():
+            await mm._upload_form_data(url, MagicMock())
+            headers = mock_client_session.call_args.kwargs["headers"]
+            self.assertEqual("Authorization" in headers, sends_auth, url)
 
 
 if __name__ == "__main__":

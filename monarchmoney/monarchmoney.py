@@ -1,13 +1,15 @@
 import asyncio
 import calendar
 import csv
+import errno
 import getpass
 import json
+import logging
 import mimetypes
 import os
 import sys
-import pickle
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from io import StringIO
@@ -25,9 +27,14 @@ CSRF_KEY = "csrftoken"
 DEFAULT_RECORD_LIMIT = 100
 DEFAULT_DELAY_SECS = 10
 ERRORS_KEY = "error_code"
-SESSION_DIR = ".mm"
-SESSION_FILE = f"{SESSION_DIR}/mm_session.pickle"
+SESSION_DIR = os.path.expanduser(os.path.join("~", ".mm"))
+SESSION_FILE = os.path.join(SESSION_DIR, "mm_session.json")
+# The pre-JSON default: a cwd-relative pickle file that older versions wrote
+# and that this version never reads or deletes automatically (see below).
+LEGACY_SESSION_FILE = os.path.join(".mm", "mm_session.pickle")
 DEFAULT_TIMEOUT_SECS = 300
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_COOKIES = ("session_id", "csrftoken")
 
@@ -68,7 +75,9 @@ class MonarchMoneyEndpoints(object):
 
     @classmethod
     def getRetailSyncFilesEndpoint(cls, sync_id: str) -> str:
-        return cls.BASE_URL + f"/retail-sync/{sync_id}/files"
+        return (
+            cls.BASE_URL + f"/retail-sync/{urllib.parse.quote(sync_id, safe='')}/files"
+        )
 
 
 class RequireMFAException(Exception):
@@ -85,6 +94,22 @@ class RequestFailedException(Exception):
 
 class CaptchaRequiredException(LoginFailedException):
     pass
+
+
+class LegacySessionFileException(LoginFailedException):
+    """The session file is not JSON (e.g. an old pickle) and was not loaded."""
+
+
+def _warn_if_legacy_pickle_present() -> None:
+    """Warns if a pre-JSON pickle session file sits at the exact old default
+    location (cwd-relative). It is never read or deleted automatically since
+    that path is arbitrary/cwd-relative; the user must remove it by hand."""
+    if os.path.exists(LEGACY_SESSION_FILE):
+        logger.warning(
+            "Found legacy session file at %s (pickle format). It is not read "
+            "or removed automatically; delete it manually.",
+            os.path.abspath(LEGACY_SESSION_FILE),
+        )
 
 
 def _to_iso_date(
@@ -117,7 +142,9 @@ class MonarchMoney(object):
         if token:
             self._headers["Authorization"] = f"Token {token}"
 
-        self._session_file = session_file
+        # Resolve to an absolute path now, while the cwd is known, so a later
+        # cwd change can't make save/load/delete disagree on the file location.
+        self._session_file = os.path.abspath(os.path.expanduser(session_file))
         self._token = token
         self._cookies: Optional[Dict[str, str]] = None
         self._auth_mode: str = "token"
@@ -132,6 +159,14 @@ class MonarchMoney(object):
     def _is_long_lived(token_expiration) -> bool:
         # Monarch long-lived browser-style sessions return tokenExpiration = null/None
         return token_expiration in (None, "null")
+
+    def _resolve_session_path(self, filename: Optional[str] = None) -> str:
+        """Resolve a session file path, defaulting to the configured session
+        file, expanding a leading ~, and making it absolute so save/load/delete
+        agree even if the process's cwd changes between calls."""
+        return os.path.abspath(
+            os.path.expanduser(filename if filename is not None else self._session_file)
+        )
 
     @property
     def timeout(self) -> int:
@@ -161,6 +196,15 @@ class MonarchMoney(object):
         self._headers.pop("Authorization", None)
         self._headers.update(MONARCH_COOKIE_HEADERS)
         self._headers["X-Csrftoken"] = cookies["csrftoken"]
+
+    def _reset_to_token_auth(self) -> None:
+        """Clears cookie-auth state (cookies, auth mode, cookie headers) so a
+        stale cookie session can't leak into a subsequent credential login,
+        which only sets a token."""
+        self._cookies = None
+        self._auth_mode = "token"
+        for key in list(MONARCH_COOKIE_HEADERS) + ["X-Csrftoken"]:
+            self._headers.pop(key, None)
 
     async def login_with_cookies(
         self,
@@ -211,10 +255,16 @@ class MonarchMoney(object):
         mfa_secret_key: Optional[str] = None,
     ) -> None:
         """Logs into a Monarch Money account."""
-        if use_saved_session and os.path.exists(self._session_file):
-            print(f"Using saved session found at {self._session_file}", file=sys.stderr)
-            self.load_session(self._session_file)
-            return
+        _warn_if_legacy_pickle_present()
+        session_path = self._resolve_session_path()
+        if use_saved_session and os.path.exists(session_path):
+            print(f"Using saved session found at {session_path}", file=sys.stderr)
+            try:
+                self.load_session(session_path)
+                return
+            except (LegacySessionFileException, LoginFailedException) as e:
+                print(str(e), file=sys.stderr)
+                self._reset_to_token_auth()
 
         if (email is None) or (password is None) or (email == "") or (password == ""):
             raise LoginFailedException(
@@ -244,11 +294,16 @@ class MonarchMoney(object):
         headers.pop("Accept", None)
         headers.pop("Content-Type", None)
 
-        if "monarch.com" in url:
+        host = urllib.parse.urlparse(url).hostname or ""
+        if host == "monarch.com" or host.endswith(".monarch.com"):
             cookies = self._cookies if self._auth_mode == "cookie" else None
         else:
             cookies = None
-            for key in list(MONARCH_COOKIE_HEADERS) + ["X-Csrftoken"]:
+            for key in list(MONARCH_COOKIE_HEADERS) + [
+                "X-Csrftoken",
+                "Authorization",
+                AUTH_HEADER_KEY,
+            ]:
                 headers.pop(key, None)
         async with ClientSession(
             headers=headers, cookies=cookies, trust_env=True
@@ -4021,9 +4076,7 @@ class MonarchMoney(object):
 
     def save_session(self, filename: Optional[str] = None) -> None:
         """Saves auth credentials needed to access a Monarch Money account."""
-        if filename is None:
-            filename = self._session_file
-        filename = os.path.abspath(filename)
+        filename = self._resolve_session_path(filename)
 
         if not self._token and not self._cookies:
             raise LoginFailedException("No credentials set; cannot save session.")
@@ -4041,17 +4094,56 @@ class MonarchMoney(object):
         if self._cookies:
             session_data["cookies"] = self._cookies
 
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        with open(filename, "wb") as fh:
-            pickle.dump(session_data, fh)
+        # The file holds a bearer credential: keep it owner-only.
+        dirname = os.path.dirname(filename)
+        if dirname:
+            os.makedirs(dirname, mode=0o700, exist_ok=True)
+            # makedirs' mode only applies when it creates the directory, so a
+            # pre-existing default session dir with looser perms stays that way.
+            # Tighten it best-effort, but never chmod a user-chosen directory
+            # (e.g. the cwd) that we didn't create for this purpose.
+            if os.path.abspath(dirname) == os.path.abspath(SESSION_DIR):
+                try:
+                    os.chmod(dirname, 0o700)
+                except OSError:
+                    pass
+        # O_NOFOLLOW refuses to write through a symlink planted at this path
+        # (e.g. by another local user in a shared writable directory), which
+        # would otherwise leak the bearer token to the link's target.
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(
+                filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow, 0o600
+            )
+        except OSError as e:
+            if nofollow and e.errno == errno.ELOOP:
+                raise OSError(
+                    f"Refusing to save session: {filename} is a symlink."
+                ) from e
+            raise
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump(session_data, fh)
+        if not hasattr(os, "fchmod"):
+            os.chmod(filename, 0o600)
 
     def load_session(self, filename: Optional[str] = None) -> None:
-        """Loads auth credentials from a pickle file."""
-        if filename is None:
-            filename = self._session_file
+        """Loads auth credentials from a JSON session file."""
+        _warn_if_legacy_pickle_present()
+        filename = self._resolve_session_path(filename)
 
+        # Never unpickle: older versions wrote pickle files, which can run code.
         with open(filename, "rb") as fh:
-            data = pickle.load(fh)
+            try:
+                data = json.loads(fh.read())
+            except ValueError:
+                data = None
+        if not isinstance(data, dict):
+            raise LegacySessionFileException(
+                f"Legacy or invalid session file ignored at {filename}; "
+                "please log in again."
+            )
 
         auth_mode = data.get("auth_mode", "token")
 
@@ -4080,8 +4172,7 @@ class MonarchMoney(object):
         """
         Deletes the session file.
         """
-        if filename is None:
-            filename = self._session_file
+        filename = self._resolve_session_path(filename)
 
         if os.path.exists(filename):
             os.remove(filename)

@@ -4,12 +4,10 @@ import json
 
 from monarchmoney import MonarchMoney
 
-_SESSION_FILE_ = ".mm/mm_session.pickle"
-
 
 def main() -> None:
-    # Use session file
-    mm = MonarchMoney(session_file=_SESSION_FILE_)
+    # Use the default session file (~/.mm/mm_session.json)
+    mm = MonarchMoney()
     asyncio.run(mm.interactive_login())
 
     # Subscription details
